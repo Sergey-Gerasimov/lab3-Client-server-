@@ -2,6 +2,6 @@
 
 int main()
 {
-	printf("Server");
+	printf("Server\n");
 	return 0;
 }

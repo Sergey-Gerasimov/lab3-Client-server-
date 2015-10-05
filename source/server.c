@@ -1,15 +1,49 @@
-#include<stdio.h>
-#include<string.h>    //strlen
-#include<sys/socket.h>
-#include<arpa/inet.h> //inet_addr
-#include<unistd.h>    //write
+#include <pthread.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <signal.h>
+#include <stdio.h>
+#include <string.h>
+
+void* handle_client(void* arg)
+{
+    long socket = (long) arg;
+    char buf[1024];
+    FILE* file;
+    int bytes_read;
+
+    if (recv(socket, buf, 1024, 0) < 0) {
+        puts("Error: receive failed");
+    }
+
+    file = fopen(buf, "rb");
+
+    if (file == 0) {
+        buf[0] = '\0';
+        puts("Error: could not open input file");
+        send(socket, buf, 0, 0);
+    } else {
+        while ((bytes_read = fread(buf, 1, 1024, file)) > 0) {
+            if (send(socket, buf, bytes_read, 0) < 0) {
+                puts("Error: send failed");
+                break;
+            }
+        }
+
+        fclose(file);
+    }
+
+    close(socket);
+    puts("Connection closed");
+}
  
 int main(int argc , char *argv[])
 {
     int socket_desc , client_sock , c , read_size;
     struct sockaddr_in server , client;
-    char client_message[2000];
-     
+    pthread_t thread;
+        
     //Create socket
     socket_desc = socket(AF_INET , SOCK_STREAM , 0);
     if (socket_desc == -1)
@@ -35,36 +69,43 @@ int main(int argc , char *argv[])
     //Listen
     listen(socket_desc , 3);
      
-    //Accept and incoming connection
     puts("Waiting for incoming connections...");
-    c = sizeof(struct sockaddr_in);
-     
+    
     //accept connection from an incoming client
-    client_sock = accept(socket_desc, (struct sockaddr *)&client, (socklen_t*)&c);
-    if (client_sock < 0)
-    {
-        perror("accept failed");
-        return 1;
-    }
-    puts("Connection accepted");
+    while (1) {
+        client_sock = accept(socket_desc, (struct sockaddr *)&client, (socklen_t*)&c);
+
+        if (client_sock < 0) {
+            puts("Error: accept failed");
+            continue;
+        }
+
+        puts("Connection accepted");
      
-    //Receive a message from client
-    while( (read_size = recv(client_sock , client_message , 2000 , 0)) > 0 )
-    {
-        //Send the message back to client
-        write(client_sock , client_message , strlen(client_message));
-	memset(client_message, 0, sizeof(client_message));
+        //Receive a message from client
+	#if PROC
+        switch(fork()) {
+            case -1:
+                puts("Error: could not create a process");
+                close(client_sock);
+                continue;
+
+            case 0:
+                handle_client((void*)(long) client_sock);
+                _exit(0);
+
+            default:
+                continue;
+        }
+	#else
+        if (pthread_create(&thread, NULL, handle_client, (void*)(long)client_sock)) {
+            puts("Error: could not create a thread");
+            close(client_sock);
+            continue;
+        }
+	#endif
     }
-     
-    if(read_size == 0)
-    {
-        puts("Client disconnected");
-        fflush(stdout);
-    }
-    else if(read_size == -1)
-    {
-        perror("recv failed");
-    }
-     
+
+    close(socket_desc);
     return 0;
 }
